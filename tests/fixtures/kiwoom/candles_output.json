@@ -1,0 +1,22 @@
+{
+  "output": [
+    {
+      "stck_bsop_date": "20260101",
+      "stck_cntg_hour": "090000",
+      "stck_oprc": "100",
+      "stck_hgpr": "102",
+      "stck_lwpr": "99",
+      "stck_clpr": "101",
+      "acml_vol": "1000"
+    },
+    {
+      "stck_bsop_date": "20260101",
+      "stck_cntg_hour": "090500",
+      "stck_oprc": "101",
+      "stck_hgpr": "103",
+      "stck_lwpr": "100",
+      "stck_clpr": "102",
+      "acml_vol": "1200"
+    }
+  ]
+}

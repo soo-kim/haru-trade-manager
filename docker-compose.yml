@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: haru
+      POSTGRES_PASSWORD: haru
+      POSTGRES_DB: haru_trade
+    ports:
+      - "6432:5432"
+    volumes:
+      - ./.data/postgres:/var/lib/postgresql/data
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://haru:haru@db:5432/haru_trade
+      ENVIRONMENT: local
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"

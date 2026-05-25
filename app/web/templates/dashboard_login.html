@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>하루 트레이드 대시보드 로그인</title>
+  <style>
+    :root {
+      --bg-a: #f2f7ff;
+      --bg-b: #fff7ed;
+      --ink: #1f2937;
+      --accent: #0f766e;
+      --accent-ink: #ecfeff;
+      --danger: #b91c1c;
+      --card: rgba(255,255,255,.85);
+      --line: rgba(15,23,42,.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+      color: var(--ink);
+      background: radial-gradient(circle at 20% 20%, var(--bg-a), transparent 40%),
+                  radial-gradient(circle at 80% 80%, var(--bg-b), transparent 40%),
+                  linear-gradient(120deg, #f8fafc, #eef2ff);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(460px, 96vw);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 24px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 12px 35px rgba(2, 6, 23, 0.08);
+      animation: rise .35s ease;
+    }
+    @keyframes rise { from { opacity: 0; transform: translateY(12px);} to { opacity: 1; transform: translateY(0);} }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    p { margin: 0 0 18px; color: #475569; }
+    .row { display: grid; gap: 10px; margin-top: 12px; }
+    .hidden { display: none; }
+    .otp-inline {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .otp-inline input {
+      flex: 1;
+      min-width: 0;
+    }
+    input {
+      height: 44px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      padding: 0 12px;
+      font-size: 16px;
+    }
+    button {
+      height: 44px;
+      border: 0;
+      border-radius: 12px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-weight: 700;
+      cursor: pointer;
+    }
+    #verifyBtn { min-width: 70px; }
+    .alt { background: #334155; }
+    #msg { margin-top: 12px; min-height: 20px; font-size: 14px; color: #0f172a; }
+    .err { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>대시보드 OTP 로그인</h1>
+    <p>텔레그램으로 발급된 OTP를 입력해 로그인하세요.</p>
+    <div class="row">
+      <button id="requestBtn" class="alt">OTP 요청</button>
+    </div>
+    <div id="verifyRow" class="row hidden">
+      <label for="code" style="font-size:13px;color:#334155;">OTP 코드</label>
+      <div class="otp-inline">
+        <input id="code" inputmode="numeric" maxlength="10" placeholder="OTP 코드" aria-label="OTP 코드" autocomplete="off" />
+        <button id="verifyBtn">인증</button>
+      </div>
+    </div>
+    <div id="msg"></div>
+  </main>
+  <script>
+    const msg = document.getElementById("msg");
+    function setMsg(text, isError=false) {
+      msg.textContent = text;
+      msg.className = isError ? "err" : "";
+    }
+    function authErrorText(body) {
+      const code = body.error || "알수없음";
+      const retry = body.retry_after_seconds;
+      if (code === "otp_verify_locked") return "OTP 검증이 잠겼습니다. " + (retry ? `${retry}초 후 다시 시도하세요.` : "잠시 후 다시 시도하세요.");
+      if (code === "otp_request_rate_limited" || code === "otp_request_locked") return "OTP 요청이 제한되었습니다. " + (retry ? `${retry}초 후 재시도하세요.` : "잠시 후 재시도하세요.");
+      if (code === "otp_mismatch") return "OTP가 일치하지 않습니다. 다시 확인해 주세요.";
+      if (code === "otp_expired") return "OTP가 만료되었습니다. OTP를 다시 요청해 주세요.";
+      if (code === "otp_not_requested") return "먼저 OTP를 요청해 주세요.";
+      return "인증 실패: " + code;
+    }
+    document.getElementById("requestBtn").onclick = async () => {
+      const verifyRow = document.getElementById("verifyRow");
+      const res = await fetch("/auth/otp/request", { method: "POST" });
+      const body = await res.json();
+      if (!body.ok) return setMsg(authErrorText(body), true);
+      setMsg("OTP 요청 완료. 텔레그램을 확인하세요.");
+      verifyRow.classList.remove("hidden");
+      document.getElementById("code").focus();
+    };
+    document.getElementById("verifyBtn").onclick = async () => {
+      const code = (document.getElementById("code").value || "").trim();
+      const res = await fetch("/auth/otp/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const body = await res.json();
+      if (!body.ok) return setMsg(authErrorText(body), true);
+      setMsg("로그인 성공. 대시보드로 이동합니다.");
+      setTimeout(() => { window.location.href = "/dashboard/app"; }, 350);
+    };
+    document.getElementById("code").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        document.getElementById("verifyBtn").click();
+      }
+    });
+  </script>
+</body>
+</html>

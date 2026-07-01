@@ -23,6 +23,7 @@ def create_dashboard_read_router(
     candle_row_model,
     supported_timeframes: tuple[str, ...],
     candle_coverage_service=None,
+    batch_backtest_service=None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -108,6 +109,16 @@ def create_dashboard_read_router(
             }
         except SQLAlchemyError as exc:
             return {"ok": False, "error": str(exc)}
+
+    @router.get("/dashboard/backtests/{job_id}/items")
+    async def dashboard_backtest_items(
+        job_id: str,
+        _: dict[str, object] = Depends(require_dashboard_session),
+    ) -> dict[str, object]:
+        if batch_backtest_service is None:
+            return {"ok": False, "error": "batch_backtest_service_unavailable"}
+        items = await batch_backtest_service.list_batch_items(job_id)
+        return {"ok": True, "data": {"items": items}, "meta": {"total": len(items), "job_id": job_id}}
 
     @router.get("/dashboard/market-data/coverage")
     def dashboard_market_data_coverage(

@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.bootstrap import build_core_services
@@ -22,6 +22,8 @@ from app.domain.models import Candle, Signal
 from app.domain.universe_status import UniverseStatus, universe_status_label_ko
 from app.integrations.kiwoom import KiwoomApiClient, KiwoomMarketDataGateway
 from app.services.backtest_scheduler import AutoBacktestScheduler
+from app.repositories.market_data import CandleCollectionStateRepository
+from app.services.batch_backtest import BatchBacktestRequest, BatchBacktestService, BatchCoveragePolicy, BatchUniverseFilter
 from app.services.candle_coverage import CandleCoverageService
 from app.services.daily_report import DailyIncidentReporter
 from app.services.live_preflight import LivePreflightService
@@ -93,6 +95,7 @@ config_repo = _core_services.config_repo
 paper_repo = _core_services.paper_repo
 strategy_performance_service = _core_services.strategy_performance_service
 paper_report_service = _core_services.paper_report_service
+collection_state_repo = CandleCollectionStateRepository()
 candle_coverage_service = CandleCoverageService(
     session_factory=SessionLocal,
     universe_repo=universe_repo,
@@ -186,6 +189,29 @@ class BacktestRunRequest(BaseModel):
     candles: list[BacktestCandleRequest]
     signals: list[BacktestSignalRequest]
     slippage_pct: float | None = None
+
+
+class BatchUniverseRequest(BaseModel):
+    active_only: bool = True
+    exclude_blocked: bool = True
+    include_halted: bool = False
+    tickers: list[str] | None = None
+
+
+class BatchCoveragePolicyRequest(BaseModel):
+    require_state_success: bool = False
+    allow_partial_range: bool = False
+
+
+class BatchBacktestRunRequest(BaseModel):
+    strategy_id: str
+    timeframe: str
+    start: datetime
+    end: datetime
+    universe: BatchUniverseRequest = Field(default_factory=BatchUniverseRequest)
+    params: dict[str, object] = Field(default_factory=dict)
+    min_candles: int = 100
+    coverage_policy: BatchCoveragePolicyRequest = Field(default_factory=BatchCoveragePolicyRequest)
 
 
 class UniverseUpsertRequest(BaseModel):
@@ -556,6 +582,32 @@ async def auto_backtest_run_now() -> dict[str, object]:
     return await auto_backtest_scheduler.trigger_now(reason="manual_api")
 
 
+@app.post("/system/backtest/batch/run")
+async def run_batch_backtest(req: BatchBacktestRunRequest) -> dict[str, object]:
+    return await _start_batch_backtest(req)
+
+
+@app.get("/system/backtest/batch/jobs")
+async def list_batch_backtest_jobs(limit: int = 20, offset: int = 0, status: str | None = None) -> dict[str, object]:
+    total = batch_backtest_service.count_batches(status=status)
+    items = await batch_backtest_service.list_batches(limit=max(1, min(limit, 200)), offset=max(offset, 0), status=status)
+    return {"ok": True, "meta": {"total": total, "offset": max(offset, 0), "limit": max(1, min(limit, 200)), "status": status}, "items": items}
+
+
+@app.get("/system/backtest/batch/jobs/{job_id}")
+async def get_batch_backtest_job(job_id: str) -> dict[str, object]:
+    job = await batch_backtest_service.get_batch(job_id)
+    if job is None:
+        return {"ok": False, "error": "job_not_found", "job_id": job_id}
+    return {"ok": True, **job}
+
+
+@app.get("/system/backtest/batch/jobs/{job_id}/items")
+async def list_batch_backtest_items(job_id: str) -> dict[str, object]:
+    items = await batch_backtest_service.list_batch_items(job_id)
+    return {"ok": True, "meta": {"total": len(items), "job_id": job_id}, "items": items}
+
+
 @app.get("/system/universe")
 def list_universe(
     runtime_only: bool = False,
@@ -676,6 +728,61 @@ def _build_strategy_instance(*, strategy_id: str, timeframe: str, k: float) -> o
     if normalized == "5":
         return SupportResistanceStrategy(timeframe=timeframe)
     raise ValueError(f"지원하지 않는 strategy_id: {strategy_id}")
+
+
+def _batch_strategy_factory(strategy_id: str, timeframe: str, params: dict[str, object]) -> object:
+    k = float(params.get("k", 0.5))
+    return _build_strategy_instance(strategy_id=strategy_id, timeframe=timeframe, k=k)
+
+
+batch_backtest_service = BatchBacktestService(
+    session_factory=SessionLocal,
+    universe_repo=universe_repo,
+    candle_repo=candle_repo,
+    state_repo=collection_state_repo,
+    backtest_repo=backtest_service.backtest_repo,
+    strategy_factory=_batch_strategy_factory,
+    now_fn=lambda: datetime.now(_SERVER_TZ),
+)
+
+
+async def _start_batch_backtest(req: BatchBacktestRunRequest) -> dict[str, object]:
+    if req.end <= req.start:
+        return {"ok": False, "error": "end must be after start"}
+    clean_timeframe = req.timeframe.strip()
+    if clean_timeframe not in _SUPPORTED_TIMEFRAMES:
+        return {"ok": False, "error": f"unsupported timeframe: {clean_timeframe}"}
+    slippage_pct = req.params.get("slippage_pct", _backtest_slippage_default())
+    try:
+        effective_slippage_pct = float(slippage_pct)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "slippage_pct must be numeric"}
+    if effective_slippage_pct < 0 or effective_slippage_pct > 0.5:
+        return {"ok": False, "error": "slippage_pct must be between 0 and 0.5"}
+    params = dict(req.params)
+    params["slippage_pct"] = effective_slippage_pct
+    batch_request = BatchBacktestRequest(
+        strategy_id=_normalize_strategy_id(req.strategy_id),
+        timeframe=clean_timeframe,
+        start=req.start,
+        end=req.end,
+        universe_filter=BatchUniverseFilter(
+            active_only=req.universe.active_only,
+            exclude_blocked=req.universe.exclude_blocked,
+            include_halted=req.universe.include_halted,
+            tickers=req.universe.tickers,
+        ),
+        params={**_backtest_risk_meta(), **params},
+        min_candles=max(int(req.min_candles), 2),
+        coverage_policy=BatchCoveragePolicy(
+            require_state_success=req.coverage_policy.require_state_success,
+            allow_partial_range=req.coverage_policy.allow_partial_range,
+        ),
+    )
+    job_id = await batch_backtest_service.run_batch(batch_request)
+    job = await batch_backtest_service.get_batch(job_id)
+    meta = dict(job.get("meta", {})) if job else {}
+    return {"ok": True, "job_id": job_id, "status": job.get("status") if job else "queued", "meta": meta}
 
 
 def _backtest_risk_meta() -> dict[str, float]:
@@ -1132,6 +1239,7 @@ app.include_router(
         candle_row_model=CandleRow,
         supported_timeframes=_SUPPORTED_TIMEFRAMES,
         candle_coverage_service=candle_coverage_service,
+        batch_backtest_service=batch_backtest_service,
     )
 )
 
@@ -1139,6 +1247,7 @@ app.include_router(
     create_dashboard_actions_router(
         require_dashboard_session=_require_dashboard_session,
         start_manual_backtest=_start_manual_backtest,
+        start_batch_backtest=_start_batch_backtest,
         rebalance_universe=_rebalance_universe,
     )
 )

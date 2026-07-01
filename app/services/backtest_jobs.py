@@ -274,17 +274,21 @@ class BacktestJobService:
 
     @staticmethod
     def _run_to_job(row: BacktestRun) -> dict[str, object]:
-        result = row.summary_json if row.status == "completed" else None
+        terminal_statuses = {"completed", "completed_with_errors", "failed", "excluded"}
+        result = row.summary_json if row.status in {"completed", "completed_with_errors", "excluded"} else None
         return {
             "job_id": row.id,
             "status": row.status,
-            "progress": 100 if row.status in {"completed", "failed"} else 0,
+            "progress": 100 if row.status in terminal_statuses else 0,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "started_at": None,
             "completed_at": row.completed_at.isoformat() if row.completed_at else None,
             "result": result,
             "error": row.error,
             "meta": dict(row.meta_json or {}),
+            "run_type": row.run_type,
+            "parent_run_id": row.parent_run_id,
+            "ticker": row.ticker,
             "persistent": True,
         }
 
@@ -320,6 +324,9 @@ class BacktestJobService:
                 status="queued",
                 meta=meta,
                 created_at=created_at,
+                run_type=str(meta.get("run_type") or "single"),
+                parent_run_id=str(meta.get("parent_run_id")) if meta.get("parent_run_id") else None,
+                ticker=str(meta.get("ticker")) if meta.get("ticker") else None,
             )
 
     def _mark_persistent_running(self, job_id: str) -> None:

@@ -20,6 +20,11 @@ class BacktestRun(Base):
     slippage_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     commission_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    run_type: Mapped[str] = mapped_column(String(32), nullable=False, default="single", index=True)
+    parent_run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    ticker: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     meta_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

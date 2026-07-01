@@ -362,6 +362,7 @@
             <input id="btK" type="number" step="0.01" min="0" max="3" value="0.5" aria-label="변동성 돌파 K값" />
           </label>
           <button id="btRunBtn" class="warn">수동 백테스트 실행</button>
+          <button id="btBatchRunBtn" class="warn">유니버스 배치 실행</button>
           <button id="btReloadBtn" class="ghost">최근 작업 새로고침</button>
         </div>
         <div class="small" id="btRangeInfo">-</div>
@@ -372,7 +373,7 @@
           <table>
             <thead>
               <tr>
-                <th>생성시각</th><th>상태</th><th>종목</th><th>전략</th><th>타임프레임</th><th>진행률</th><th>거래수</th><th>승률</th><th>수익률(%)</th><th>오류</th>
+                <th>생성시각</th><th>상태</th><th>유형</th><th>종목</th><th>전략</th><th>타임프레임</th><th>진행률</th><th>대상/완료/실패/제외</th><th>거래수</th><th>승률</th><th>수익률(%)</th><th>오류</th>
               </tr>
             </thead>
             <tbody id="backtestsBody"></tbody>
@@ -572,12 +573,16 @@
       if (status === "queued") return "대기";
       if (status === "running") return "실행중";
       if (status === "completed") return "완료";
+      if (status === "completed_with_errors") return "일부실패";
+      if (status === "excluded") return "제외";
       if (status === "failed") return "실패";
       return status || "-";
     }
     function backtestStatusClass(status) {
       if (status === "running") return "status-running";
       if (status === "completed") return "status-completed";
+      if (status === "completed_with_errors") return "status-failed";
+      if (status === "excluded") return "status-queued";
       if (status === "failed") return "status-failed";
       return "status-queued";
     }
@@ -731,7 +736,7 @@
       const rows = res.data.items || [];
       q("backtestsSummary").textContent = `총 ${res.meta?.total ?? rows.length}건 / 현재 ${rows.length}건 표시`;
       if (!rows.length) {
-        q("backtestsBody").innerHTML = '<tr><td colspan="10" style="text-align:center;">백테스트 이력이 없습니다.</td></tr>';
+        q("backtestsBody").innerHTML = '<tr><td colspan="12" style="text-align:center;">백테스트 이력이 없습니다.</td></tr>';
       } else {
         q("backtestsBody").innerHTML = rows.map(x => {
           const meta = x.meta || {};
@@ -744,13 +749,15 @@
             <tr>
               <td>${esc(formatTime(x.created_at))}</td>
               <td><span class="status-badge ${backtestStatusClass(x.status)}">${esc(backtestStatusLabel(x.status))}</span></td>
-              <td>${esc(meta.ticker || "-")}</td>
+              <td>${esc(meta.run_type || x.run_type || "single")}</td>
+              <td>${esc(meta.ticker || x.ticker || "-")}</td>
               <td>${esc(meta.strategy_id || "-")}</td>
               <td>${esc(meta.timeframe || "-")}</td>
               <td>${esc(progressText)}</td>
+              <td>${n(result.target_count, 0)} / ${n(result.completed_count, 0)} / ${n(result.failed_count, 0)} / ${n(result.excluded_count, 0)}</td>
               <td>${n(result.trade_count, 0)}</td>
               <td>${esc(winRateText)}</td>
-              <td class="${cls(result.total_return_pct)}">${esc(returnPctText)}<div class="small">(${esc(pnlNote)})</div></td>
+              <td class="${cls(result.total_return_pct ?? result.total_pnl)}">${esc(returnPctText)}<div class="small">(${esc(pnlNote)})</div></td>
               <td>${esc(x.error || "-")}</td>
             </tr>
           `;
@@ -814,6 +821,43 @@
         return;
       }
       q("btRunResult").textContent = `실행 요청 완료. job=${res.job_id} candles=${res.meta.candles} signals=${res.meta.signals}`;
+      q("btRunResult").className = "meta-line ok";
+      await loadBacktests();
+    }
+
+    async function runBatchBacktest() {
+      const ticker = (q("btTicker").value || "").trim();
+      const payload = {
+        strategy_id: q("btStrategy").value,
+        timeframe: q("btTimeframe").value,
+        start: normalizeDateForApi(q("btStart").value),
+        end: normalizeDateForApi(q("btEnd").value),
+        universe: { tickers: ticker ? [ticker] : null },
+        params: {
+          slippage_pct: Number(q("btSlippage").value || 0.05),
+          k: Number(q("btK").value || 0.5),
+        },
+        min_candles: 100,
+        coverage_policy: { allow_partial_range: false, require_state_success: false },
+      };
+      if (!payload.start || !payload.end) {
+        q("btRunResult").textContent = "실패: 시작시각/종료시각은 필수입니다.";
+        q("btRunResult").className = "meta-line bad";
+        return;
+      }
+      const res = await api("/dashboard/backtests/batch-run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res) return;
+      if (!res.ok) {
+        q("btRunResult").textContent = "배치 실패: " + (res.error || "알수없음");
+        q("btRunResult").className = "meta-line bad";
+        return;
+      }
+      const targetCount = res.meta?.target_count ?? "-";
+      q("btRunResult").textContent = `배치 실행 완료. job=${res.job_id} target=${targetCount} status=${res.status}`;
       q("btRunResult").className = "meta-line ok";
       await loadBacktests();
     }
@@ -1055,6 +1099,7 @@
     q("btReloadBtn").onclick = loadBacktests;
     q("btAutoRangeBtn").onclick = loadBacktestRange;
     q("btRunBtn").onclick = runManualBacktest;
+    q("btBatchRunBtn").onclick = runBatchBacktest;
     q("btTicker").onchange = loadBacktestRange;
     q("btTimeframe").onchange = loadBacktestRange;
     q("settingsHistoryReloadBtn").onclick = loadSettingsHistory;

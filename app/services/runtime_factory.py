@@ -26,6 +26,7 @@ from app.repositories.candle import CandleRepository
 from app.repositories.ordering import OrderingRepository
 from app.repositories.universe import UniverseRepository
 from app.risk.engine import RiskEngine
+from app.services.candle_collection import CandleCollectionService
 from app.services.loop_runtime import LoopRuntimeCoordinator
 from app.services.runtime_safety import RuntimeSafetyManager
 from app.services.trading_service import TradingService
@@ -305,7 +306,8 @@ def build_runtime_bundle(
 ) -> RuntimeBundle:
     mode = (trading_mode or settings.trading_mode).lower()
     server_tz = ZoneInfo(settings.server_timezone)
-    now_local = lambda: datetime.now(server_tz)
+    def now_local() -> datetime:
+        return datetime.now(server_tz)
 
     queue = InMemorySignalQueue(items=[])
     candle_repo = CandleRepository()
@@ -493,47 +495,33 @@ async def _run_post_market_daily_backfill(
             "ticker_count": 0,
         }
 
+    collector = CandleCollectionService(
+        session_factory=session_factory,
+        candle_repo=candle_repo,
+        fetcher=candle_fetcher,
+        now_fn=lambda: datetime.now(ZoneInfo(settings.server_timezone)),
+    )
+    chunk_size = max(batch_size, 1)
+    chunks = [tickers[idx : idx + chunk_size] for idx in range(0, len(tickers), chunk_size)]
     inserted_total = 0
     updated_total = 0
     failed_count = 0
+    processed = 0
     errors: list[str] = []
 
-    for idx, ticker in enumerate(tickers):
-        try:
-            with session_factory() as db:
-                since = candle_repo.get_last_candle_time(db, ticker=ticker, timeframe="1d")
+    for idx, chunk in enumerate(chunks):
+        result = await collector.collect_incremental(tickers=chunk, timeframes=("1d",), source="post_market_backfill")
+        inserted_total += int(result.get("inserted", 0))
+        updated_total += int(result.get("updated", 0))
+        failed_count += int(result.get("failed_count", 0))
+        processed += int(result.get("processed_count", 0)) + int(result.get("failed_count", 0))
+        for item in result.get("errors", []):
+            if len(errors) >= 20:
+                break
+            errors.append(str(item))
+        if batch_sleep_seconds > 0 and idx < len(chunks) - 1:
+            await asyncio.sleep(batch_sleep_seconds)
 
-            candles = await candle_fetcher.fetch_incremental(ticker=ticker, timeframe="1d", since=since)
-            if candles:
-                payload = [
-                    {
-                        "candle_time": x.ts,
-                        "open": x.open,
-                        "high": x.high,
-                        "low": x.low,
-                        "close": x.close,
-                        "volume": x.volume,
-                    }
-                    for x in candles
-                ]
-                with session_factory() as db:
-                    inserted, updated = candle_repo.upsert_batch(
-                        db,
-                        ticker=ticker,
-                        timeframe="1d",
-                        candles=payload,
-                    )
-                inserted_total += inserted
-                updated_total += updated
-        except Exception as exc:  # noqa: BLE001
-            failed_count += 1
-            if len(errors) < 20:
-                errors.append(f"{ticker}:{exc}")
-
-        if batch_size > 0 and (idx + 1) % batch_size == 0:
-            await asyncio.sleep(max(batch_sleep_seconds, 0.0))
-
-    processed = len(tickers)
     success_count = max(processed - failed_count, 0)
     success_rate = (success_count / processed) if processed > 0 else 1.0
     return {

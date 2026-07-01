@@ -22,6 +22,7 @@ from app.domain.models import Candle, Signal
 from app.domain.universe_status import UniverseStatus, universe_status_label_ko
 from app.integrations.kiwoom import KiwoomApiClient, KiwoomMarketDataGateway
 from app.services.backtest_scheduler import AutoBacktestScheduler
+from app.services.candle_coverage import CandleCoverageService
 from app.services.daily_report import DailyIncidentReporter
 from app.services.live_preflight import LivePreflightService
 from app.services.runtime_factory import run_live_connectivity_check
@@ -92,6 +93,11 @@ config_repo = _core_services.config_repo
 paper_repo = _core_services.paper_repo
 strategy_performance_service = _core_services.strategy_performance_service
 paper_report_service = _core_services.paper_report_service
+candle_coverage_service = CandleCoverageService(
+    session_factory=SessionLocal,
+    universe_repo=universe_repo,
+    candle_repo=candle_repo,
+)
 daily_reporter = DailyIncidentReporter(
     safety=safety_manager,
     alert_sink=alert_sink,
@@ -1125,6 +1131,7 @@ app.include_router(
         symbol_to_dict=_symbol_to_dict,
         candle_row_model=CandleRow,
         supported_timeframes=_SUPPORTED_TIMEFRAMES,
+        candle_coverage_service=candle_coverage_service,
     )
 )
 

@@ -22,6 +22,7 @@ def create_dashboard_read_router(
     symbol_to_dict: Callable[[object], dict[str, object]],
     candle_row_model,
     supported_timeframes: tuple[str, ...],
+    candle_coverage_service=None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -104,6 +105,47 @@ def create_dashboard_read_router(
                     "start": row.min_time.isoformat() if row.min_time is not None else None,
                     "end": row.max_time.isoformat() if row.max_time is not None else None,
                 },
+            }
+        except SQLAlchemyError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @router.get("/dashboard/market-data/coverage")
+    def dashboard_market_data_coverage(
+        timeframe: str | None = None,
+        stale_before: str | None = None,
+        _: dict[str, object] = Depends(require_dashboard_session),
+    ) -> dict[str, object]:
+        if candle_coverage_service is None:
+            return {"ok": False, "error": "coverage_service_unavailable"}
+        timeframes = tuple([timeframe.strip()] if timeframe and timeframe.strip() else supported_timeframes)
+        unsupported = [x for x in timeframes if x not in supported_timeframes]
+        if unsupported:
+            return {"ok": False, "error": f"unsupported timeframe: {unsupported[0]}"}
+        stale_after = None
+        if stale_before is not None and stale_before.strip():
+            try:
+                stale_after = datetime.fromisoformat(stale_before)
+            except ValueError:
+                return {"ok": False, "error": "invalid stale_before"}
+        try:
+            return {"ok": True, "data": candle_coverage_service.coverage(timeframes=timeframes, stale_after=stale_after)}
+        except SQLAlchemyError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @router.get("/dashboard/market-data/collection-states")
+    def dashboard_market_data_collection_states(
+        timeframe: str | None = None,
+        ticker: str | None = None,
+        _: dict[str, object] = Depends(require_dashboard_session),
+    ) -> dict[str, object]:
+        if candle_coverage_service is None:
+            return {"ok": False, "error": "coverage_service_unavailable"}
+        if timeframe is not None and timeframe.strip() and timeframe.strip() not in supported_timeframes:
+            return {"ok": False, "error": f"unsupported timeframe: {timeframe.strip()}"}
+        try:
+            return {
+                "ok": True,
+                "data": {"items": candle_coverage_service.states(timeframe=timeframe, ticker=ticker)},
             }
         except SQLAlchemyError as exc:
             return {"ok": False, "error": str(exc)}

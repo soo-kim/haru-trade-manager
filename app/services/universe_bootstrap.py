@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from http.cookiejar import CookieJar
 from logging import Logger
 from urllib.error import HTTPError, URLError
@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.models.candle import Candle as CandleRow
+from app.db.models.market_data import CandleCollectionState
 from app.db.models.universe import Symbol
 from app.domain.universe_status import UniverseStatus
 
@@ -426,6 +427,26 @@ async def bootstrap_candles_on_first_run(
                         timeframe=timeframe,
                         candles=payload,
                     )
+                    row = db.execute(
+                        select(
+                            func.min(CandleRow.candle_time).label("first_candle_time"),
+                            func.max(CandleRow.candle_time).label("last_candle_time"),
+                            func.count(CandleRow.id).label("row_count"),
+                        ).where(CandleRow.ticker == ticker, CandleRow.timeframe == timeframe)
+                    ).one()
+                    state = db.get(CandleCollectionState, {"ticker": ticker, "timeframe": timeframe})
+                    if state is None:
+                        state = CandleCollectionState(ticker=ticker, timeframe=timeframe)
+                        db.add(state)
+                    state.first_candle_time = row.first_candle_time
+                    state.last_candle_time = row.last_candle_time
+                    state.row_count = int(row.row_count or 0)
+                    state.last_success_at = datetime.now(timezone.utc)
+                    state.last_error = None
+                    state.consecutive_error_count = 0
+                    state.source = "kiwoom"
+                    state.updated_at = state.last_success_at
+                    db.commit()
                 status["candles_inserted"] = int(status["candles_inserted"]) + inserted
                 status["candles_updated"] = int(status["candles_updated"]) + updated
                 tf_stats = status["timeframe_stats"].get(timeframe, {})
@@ -437,6 +458,20 @@ async def bootstrap_candles_on_first_run(
                 status["timeframe_stats"][timeframe] = tf_stats
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{ticker}:{timeframe}:{exc}")
+                try:
+                    with session_factory() as db:
+                        state = db.get(CandleCollectionState, {"ticker": ticker, "timeframe": timeframe})
+                        if state is None:
+                            state = CandleCollectionState(ticker=ticker, timeframe=timeframe, row_count=0)
+                            db.add(state)
+                        state.last_error_at = datetime.now(timezone.utc)
+                        state.last_error = str(exc)[:2000]
+                        state.consecutive_error_count = int(state.consecutive_error_count or 0) + 1
+                        state.source = "kiwoom"
+                        state.updated_at = state.last_error_at
+                        db.commit()
+                except Exception:  # noqa: BLE001
+                    pass
         if has_any:
             status["tickers_with_candles"] = int(status["tickers_with_candles"]) + 1
 

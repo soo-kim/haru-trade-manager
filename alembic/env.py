@@ -44,6 +44,7 @@ def _ensure_alembic_version_column_length(connection) -> None:
     if connection.dialect.name != "postgresql":
         return
     connection.execute(text("ALTER TABLE IF EXISTS alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)"))
+    connection.commit()
 
 
 if context.is_offline_mode():

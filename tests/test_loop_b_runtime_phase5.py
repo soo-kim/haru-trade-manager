@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 
+from app.db.models.market_data import CandleCollectionState
 from app.domain.models import Candle, Signal
 from app.loops.core import InMemorySignalQueue, LoopBScanner
 from app.loops.loop_b_runtime import LoopBRunner, MarketSchedule
@@ -97,6 +98,11 @@ def test_loop_b_runner_syncs_candles_and_dedupes_same_slot():
 
     with maker() as db:
         rows = repo.list_recent(db, ticker=ticker, timeframe="5m", limit=10)
+        state = db.get(CandleCollectionState, {"ticker": ticker, "timeframe": "5m"})
         assert len(rows) == 2
         assert rows[0].close == 101
         assert rows[1].close == 102
+        assert state is not None
+        assert state.row_count == 2
+        assert state.last_candle_time == t1
+        assert state.last_error is None

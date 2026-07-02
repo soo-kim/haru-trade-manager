@@ -12,6 +12,8 @@ services:
 
   app:
     build: .
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+psycopg://haru:haru@db:5432/haru_trade
       ENVIRONMENT: local

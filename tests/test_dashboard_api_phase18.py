@@ -83,6 +83,19 @@ def test_dashboard_summary_and_backtests_schema():
         assert "ok" in sf
         assert "meta" in sf
 
+        market_coverage = client.get("/dashboard/market-data/coverage?timeframe=3m", headers=headers)
+        assert market_coverage.status_code == 200
+        mc = market_coverage.json()
+        assert mc["ok"] is True
+        assert "universe_count" in mc["data"]
+        assert "3m" in mc["data"]["timeframes"]
+
+        collection_states = client.get("/dashboard/market-data/collection-states?timeframe=3m", headers=headers)
+        assert collection_states.status_code == 200
+        cs = collection_states.json()
+        assert cs["ok"] is True
+        assert "items" in cs["data"]
+
         audit = client.get("/dashboard/auth/audit?page=1&page_size=10", headers=headers)
         assert audit.status_code == 200
         au = audit.json()
@@ -113,3 +126,6 @@ def test_dashboard_html_pages():
         app_page = client.get("/dashboard/app", headers=headers)
         assert app_page.status_code == 200
         assert "하루 트레이드 대시보드" in app_page.text
+        assert "데이터 수집 현황" in app_page.text
+        assert "loadMarketDataCoverage" in app_page.text
+        assert "/dashboard/market-data/coverage" in app_page.text

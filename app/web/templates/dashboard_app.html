@@ -245,6 +245,52 @@
       </section>
 
       <section class="card span-12">
+        <div class="title">데이터 수집 현황</div>
+        <div class="row" style="margin-bottom: 8px;">
+          <label class="field" for="mdTimeframe">
+            <span>타임프레임</span>
+            <select id="mdTimeframe" aria-label="데이터 수집 현황 타임프레임">
+              <option value="">전체</option>
+              <option value="3m">3m</option>
+              <option value="5m">5m</option>
+              <option value="15m">15m</option>
+              <option value="60m">60m</option>
+              <option value="1d">1d</option>
+            </select>
+          </label>
+          <label class="field" for="mdStaleMinutes">
+            <span>스테일 기준(분)</span>
+            <input id="mdStaleMinutes" type="number" min="1" step="1" value="30" aria-label="스테일 기준 분" />
+          </label>
+          <button id="mdReloadBtn" class="ghost">수집 현황 새로고침</button>
+          <span id="mdCoverageMeta" class="small">-</span>
+        </div>
+        <div class="scroll-x">
+          <table>
+            <thead>
+              <tr>
+                <th>타임프레임</th><th>유니버스</th><th>수집 종목</th><th>누락</th><th>스테일</th><th>실패</th><th>백테스트 가능</th><th>캔들 수</th><th>최초/최신 캔들</th>
+              </tr>
+            </thead>
+            <tbody id="mdCoverageBody"></tbody>
+          </table>
+        </div>
+        <details class="details-inline" style="margin-top: 8px;">
+          <summary>최근 수집 상태 보기</summary>
+          <div class="scroll-x" style="margin-top: 6px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>종목</th><th>타임프레임</th><th>행 수</th><th>최초</th><th>최신</th><th>성공시각</th><th>연속오류</th><th>오류</th>
+                </tr>
+              </thead>
+              <tbody id="mdStateBody"></tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+
+      <section class="card span-12">
         <div class="title">포지션 현황</div>
         <div class="row" style="margin-bottom: 8px;">
           <label class="field" for="posState">
@@ -794,6 +840,61 @@
       q("btRangeInfo").className = "small ok";
     }
 
+    function staleCutoffParam() {
+      const minutes = Number(q("mdStaleMinutes").value || 30);
+      if (!Number.isFinite(minutes) || minutes <= 0) return "";
+      return new Date(Date.now() - (minutes * 60 * 1000)).toISOString();
+    }
+
+    async function loadMarketDataCoverage() {
+      const timeframe = (q("mdTimeframe").value || "").trim();
+      const params = new URLSearchParams();
+      if (timeframe) params.set("timeframe", timeframe);
+      const staleBefore = staleCutoffParam();
+      if (staleBefore) params.set("stale_before", staleBefore);
+      const coverage = await api("/dashboard/market-data/coverage?" + params.toString());
+      if (!coverage || !coverage.ok) {
+        q("mdCoverageMeta").textContent = "조회 실패: " + ((coverage && coverage.error) || "알수없음");
+        q("mdCoverageMeta").className = "small bad";
+        return;
+      }
+      const report = coverage.data || {};
+      const rows = Object.entries(report.timeframes || {});
+      q("mdCoverageMeta").textContent = `생성 ${formatTime(report.generated_at)} / 유니버스 ${report.universe_count ?? 0}`;
+      q("mdCoverageMeta").className = "small";
+      q("mdCoverageBody").innerHTML = rows.length ? rows.map(([tf, x]) => `
+        <tr>
+          <td>${esc(tf)}</td>
+          <td>${n(report.universe_count, 0)}</td>
+          <td>${n(x.ticker_count, 0)}</td>
+          <td class="${Number(x.missing_count || 0) > 0 ? "neg" : ""}">${n(x.missing_count, 0)}</td>
+          <td class="${Number(x.stale_count || 0) > 0 ? "neg" : ""}">${n(x.stale_count, 0)}</td>
+          <td class="${Number(x.failed_state_count || 0) > 0 ? "neg" : ""}">${n(x.failed_state_count, 0)}</td>
+          <td class="${Number(x.backtest_ready_count || 0) > 0 ? "pos" : ""}">${n(x.backtest_ready_count, 0)}</td>
+          <td>${n(x.row_count, 0)}</td>
+          <td>${esc(x.earliest_candle_time || "-")}<div class="small">${esc(x.latest_candle_time || "-")}</div></td>
+        </tr>
+      `).join("") : '<tr><td colspan="9" style="text-align:center;">수집 현황이 없습니다.</td></tr>';
+
+      const stateParams = new URLSearchParams();
+      if (timeframe) stateParams.set("timeframe", timeframe);
+      const states = await api("/dashboard/market-data/collection-states?" + stateParams.toString());
+      if (!states || !states.ok) return;
+      const items = (states.data?.items || []).slice(0, 80);
+      q("mdStateBody").innerHTML = items.length ? items.map(x => `
+        <tr>
+          <td>${esc(x.ticker)}</td>
+          <td>${esc(x.timeframe)}</td>
+          <td>${n(x.row_count, 0)}</td>
+          <td>${esc(x.first_candle_time || "-")}</td>
+          <td>${esc(x.last_candle_time || "-")}</td>
+          <td>${esc(x.last_success_at || "-")}</td>
+          <td class="${Number(x.consecutive_error_count || 0) > 0 ? "neg" : ""}">${n(x.consecutive_error_count, 0)}</td>
+          <td>${esc(x.last_error || "-")}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="8" style="text-align:center;">수집 상태 이력이 없습니다.</td></tr>';
+    }
+
     async function runManualBacktest() {
       const payload = {
         ticker: (q("btTicker").value || "").trim(),
@@ -1078,6 +1179,7 @@
       await Promise.all([
         loadSummary(),
         loadEquityCurve(),
+        loadMarketDataCoverage(),
         loadPositions(),
         loadStrategy(),
         loadBacktests(),
@@ -1094,6 +1196,8 @@
       window.location.href = "/dashboard/login";
     };
     q("refreshBtn").onclick = refreshAll;
+    q("mdReloadBtn").onclick = loadMarketDataCoverage;
+    q("mdTimeframe").onchange = loadMarketDataCoverage;
     q("posReloadBtn").onclick = loadPositions;
     q("stratReloadBtn").onclick = loadStrategy;
     q("btReloadBtn").onclick = loadBacktests;
@@ -1116,7 +1220,7 @@
     refreshAll();
     setTimeout(loadBacktestRange, 200);
     setInterval(async () => {
-      await Promise.all([loadSummary(), loadEquityCurve(), loadPositions(), loadStrategy(), loadBacktests(), loadUniverse()]);
+      await Promise.all([loadSummary(), loadEquityCurve(), loadMarketDataCoverage(), loadPositions(), loadStrategy(), loadBacktests(), loadUniverse()]);
       nowStamp();
     }, 15000);
   </script>

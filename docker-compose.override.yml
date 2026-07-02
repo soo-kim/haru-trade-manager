@@ -1,5 +1,7 @@
 services:
   app:
     volumes:
-      - ./:/app
+      - ./app:/app/app:Z
+      - ./alembic:/app/alembic:Z
+      - ./alembic.ini:/app/alembic.ini:Z
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

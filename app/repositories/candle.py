@@ -111,7 +111,12 @@ class CandleRepository:
         if not candles:
             return (0, 0)
 
-        times = [x["candle_time"] for x in candles if isinstance(x.get("candle_time"), datetime)]
+        deduped_by_time: dict[datetime, dict[str, float | datetime]] = {}
+        for item in candles:
+            candle_time = item.get("candle_time")
+            if isinstance(candle_time, datetime):
+                deduped_by_time[candle_time] = item
+        times = list(deduped_by_time.keys())
         existing_rows = db.scalars(
             select(CandleRow).where(
                 CandleRow.ticker == ticker,
@@ -123,10 +128,7 @@ class CandleRepository:
 
         inserted = 0
         updated = 0
-        for item in candles:
-            candle_time = item["candle_time"]
-            if not isinstance(candle_time, datetime):
-                continue
+        for candle_time, item in deduped_by_time.items():
             row = existing_map.get(candle_time)
             if row is None:
                 db.add(

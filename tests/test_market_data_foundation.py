@@ -142,6 +142,30 @@ def test_candle_coverage_service_reports_timeframe_counts_and_stale_states():
     assert report["timeframes"]["1d"]["ticker_count"] == 0
 
 
+def test_candle_repository_upsert_batch_deduplicates_payload_candle_times():
+    candle_repo = CandleRepository()
+    now = datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc)
+
+    with build_session() as db:
+        inserted, updated = candle_repo.upsert_batch(
+            db,
+            ticker="005930",
+            timeframe="3m",
+            candles=[
+                {"candle_time": now, "open": 1, "high": 2, "low": 1, "close": 2, "volume": 10},
+                {"candle_time": now, "open": 2, "high": 3, "low": 2, "close": 3, "volume": 20},
+            ],
+        )
+        rows = candle_repo.list_range(db, ticker="005930", timeframe="3m")
+
+    assert inserted == 1
+    assert updated == 0
+    assert len(rows) == 1
+    assert rows[0].open == 2
+    assert rows[0].close == 3
+    assert rows[0].volume == 20
+
+
 def test_candle_collection_service_separates_initial_and_incremental_collection():
     session_factory = build_session_factory()
     candle_repo = CandleRepository()

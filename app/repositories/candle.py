@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import cast
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.db.models.candle import Candle as CandleRow
@@ -126,31 +128,38 @@ class CandleRepository:
         ).all()
         existing_map = {x.candle_time: x for x in existing_rows}
 
-        inserted = 0
-        updated = 0
-        for candle_time, item in deduped_by_time.items():
-            row = existing_map.get(candle_time)
-            if row is None:
-                db.add(
-                    CandleRow(
-                        ticker=ticker,
-                        timeframe=timeframe,
-                        candle_time=candle_time,
-                        open=float(item["open"]),
-                        high=float(item["high"]),
-                        low=float(item["low"]),
-                        close=float(item["close"]),
-                        volume=float(item["volume"]),
-                    )
-                )
-                inserted += 1
-                continue
-            row.open = float(item["open"])
-            row.high = float(item["high"])
-            row.low = float(item["low"])
-            row.close = float(item["close"])
-            row.volume = float(item["volume"])
-            updated += 1
+        rows = [
+            {
+                "ticker": ticker,
+                "timeframe": timeframe,
+                "candle_time": candle_time,
+                "open": float(cast(float, item["open"])),
+                "high": float(cast(float, item["high"])),
+                "low": float(cast(float, item["low"])),
+                "close": float(cast(float, item["close"])),
+                "volume": float(cast(float, item["volume"])),
+            }
+            for candle_time, item in deduped_by_time.items()
+        ]
+        if not rows:
+            return (0, 0)
+        inserted = len(rows) - len(existing_map)
+        updated = len(existing_map)
+
+        stmt = pg_insert(CandleRow).values(rows)
+        excluded = stmt.excluded
+        db.execute(
+            stmt.on_conflict_do_update(
+                index_elements=["ticker", "timeframe", "candle_time"],
+                set_={
+                    "open": excluded.open,
+                    "high": excluded.high,
+                    "low": excluded.low,
+                    "close": excluded.close,
+                    "volume": excluded.volume,
+                },
+            )
+        )
 
         db.commit()
         return (inserted, updated)

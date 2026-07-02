@@ -355,8 +355,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             "ticker_count": len(bootstrap_tickers),
         }
         startup_bootstrap_task = asyncio.create_task(_run_post_seed_bootstrap(tickers=bootstrap_tickers))
-    if settings.enable_background_loops:
-        await loop_background.start()
+    await loop_background.start()
     yield
     if startup_bootstrap_task is not None and not startup_bootstrap_task.done():
         startup_bootstrap_task.cancel()

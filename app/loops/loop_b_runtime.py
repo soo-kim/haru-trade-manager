@@ -90,6 +90,7 @@ class LoopBRunner:
         schedule: MarketSchedule | None = None,
         collection_state_repo: CandleCollectionStateRepository | None = None,
         collection_source: str = "loop_b",
+        scan_enabled_provider: Callable[[], bool] | None = None,
     ) -> None:
         self.scanner = scanner
         self.candle_repo = candle_repo
@@ -99,6 +100,7 @@ class LoopBRunner:
         self.schedule = schedule or MarketSchedule()
         self.collection_state_repo = collection_state_repo or CandleCollectionStateRepository()
         self.collection_source = collection_source
+        self.scan_enabled_provider = scan_enabled_provider or (lambda: True)
         self._processed_slots: dict[tuple[str, str], str] = {}
 
     async def run_once_for_ticker(self, ticker: str) -> int:
@@ -161,6 +163,8 @@ class LoopBRunner:
                     source=self.collection_source,
                     collected_at=self.now_fn(),
                 )
+                if not self.scan_enabled_provider():
+                    return 0
                 rows = self.candle_repo.list_recent(db, ticker=ticker, timeframe=timeframe, limit=240)
         except SQLAlchemyError as exc:
             self._record_collection_failure(ticker=ticker, timeframe=timeframe, error=exc)

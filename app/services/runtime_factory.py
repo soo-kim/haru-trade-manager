@@ -358,6 +358,7 @@ def build_runtime_bundle(
         candle_fetcher=candle_fetcher,
         session_factory=session_factory,
         now_fn=time_sync.aligned_now,
+        scan_enabled_provider=lambda: settings.enable_background_loops,
     )
 
     maintenance_service.post_market_backfill_runner = lambda: _run_post_market_daily_backfill(
@@ -386,6 +387,7 @@ def build_runtime_bundle(
         now_fn=time_sync.aligned_now,
         extra_metrics_provider=maintenance_service.runtime_metrics_snapshot,
         pre_loop_b_hook=time_sync.sync_if_due_pre_market,
+        strategy_enabled_provider=lambda: settings.enable_background_loops,
     )
     return RuntimeBundle(coordinator=coordinator, queue=queue, maintenance_service=maintenance_service)
 

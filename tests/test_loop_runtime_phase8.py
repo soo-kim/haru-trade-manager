@@ -77,6 +77,32 @@ def test_loop_runtime_coordinator_success_and_loop_c_slot_dedupe():
     assert health["degraded"] is False
 
 
+def test_loop_runtime_coordinator_keeps_collection_when_strategy_disabled():
+    now = datetime(2026, 1, 1, 9, 5, tzinfo=timezone.utc)
+    values = iter([300.0, 300.1])
+    loop_a = FakeLoopA()
+    loop_b = FakeLoopB(count=0)
+    loop_c = FakeLoopC()
+
+    coordinator = LoopRuntimeCoordinator(
+        loop_a=loop_a,
+        loop_b=loop_b,
+        loop_c=loop_c,
+        tickers_provider=lambda: ["005930"],
+        now_fn=lambda: now,
+        monotonic_fn=lambda: next(values),
+        strategy_enabled_provider=lambda: False,
+    )
+
+    report = asyncio.run(coordinator.run_cycle())
+
+    assert report.ok is True
+    assert loop_a.calls == 0
+    assert loop_b.calls == ["005930"]
+    assert report.loop_b_signals == 0
+    assert coordinator.health_snapshot()["strategy_loops_enabled"] is False
+
+
 class RaiseLoopB:
     async def run_once_for_ticker(self, ticker: str) -> int:  # noqa: ARG002
         raise RuntimeError("loop-b-fail")

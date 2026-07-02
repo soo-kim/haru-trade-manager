@@ -74,6 +74,7 @@ class LoopRuntimeCoordinator:
         monotonic_fn: Callable[[], float] | None = None,
         extra_metrics_provider: Callable[[], dict[str, object]] | None = None,
         pre_loop_b_hook: Callable[[], object] | None = None,
+        strategy_enabled_provider: Callable[[], bool] | None = None,
     ) -> None:
         self.loop_a = loop_a
         self.loop_b = loop_b
@@ -86,6 +87,7 @@ class LoopRuntimeCoordinator:
         self.monotonic_fn = monotonic_fn or time.monotonic
         self.extra_metrics_provider = extra_metrics_provider
         self.pre_loop_b_hook = pre_loop_b_hook
+        self.strategy_enabled_provider = strategy_enabled_provider or (lambda: True)
 
         self.metrics = LoopRuntimeMetrics()
         self._last_loop_c_slot: str | None = None
@@ -103,7 +105,8 @@ class LoopRuntimeCoordinator:
             failed_close_orders=0,
         )
         try:
-            loop_a_result = await self.loop_a.run_once()
+            strategy_enabled = self.strategy_enabled_provider()
+            loop_a_result = await self.loop_a.run_once() if strategy_enabled else default_a
             if self.pre_loop_b_hook is not None:
                 maybe_awaitable = self.pre_loop_b_hook()
                 if inspect.isawaitable(maybe_awaitable):
@@ -162,6 +165,7 @@ class LoopRuntimeCoordinator:
             "last_loop_c_ran": self.metrics.last_loop_c_ran,
             "cycle_lag_ms": lag_ms,
             "degraded": degraded,
+            "strategy_loops_enabled": self.strategy_enabled_provider(),
         }
         if self.extra_metrics_provider is not None:
             try:

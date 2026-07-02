@@ -260,7 +260,7 @@
           </label>
           <label class="field" for="mdStaleMinutes">
             <span>스테일 기준(분)</span>
-            <input id="mdStaleMinutes" type="number" min="1" step="1" value="30" aria-label="스테일 기준 분" />
+            <input id="mdStaleMinutes" type="number" min="1" step="1" placeholder="자동" aria-label="스테일 기준 분" />
           </label>
           <button id="mdReloadBtn" class="ghost">수집 현황 새로고침</button>
           <span id="mdCoverageMeta" class="small">-</span>
@@ -840,8 +840,18 @@
       q("btRangeInfo").className = "small ok";
     }
 
-    function staleCutoffParam() {
-      const minutes = Number(q("mdStaleMinutes").value || 30);
+    function defaultStaleMinutes(timeframe) {
+      if (timeframe === "3m") return 10;
+      if (timeframe === "5m") return 15;
+      if (timeframe === "15m") return 45;
+      if (timeframe === "60m") return 180;
+      if (timeframe === "1d") return 2880;
+      return null;
+    }
+
+    function staleCutoffParam(timeframe) {
+      const raw = (q("mdStaleMinutes").value || "").trim();
+      const minutes = raw ? Number(raw) : defaultStaleMinutes(timeframe);
       if (!Number.isFinite(minutes) || minutes <= 0) return "";
       return new Date(Date.now() - (minutes * 60 * 1000)).toISOString();
     }
@@ -850,7 +860,7 @@
       const timeframe = (q("mdTimeframe").value || "").trim();
       const params = new URLSearchParams();
       if (timeframe) params.set("timeframe", timeframe);
-      const staleBefore = staleCutoffParam();
+      const staleBefore = staleCutoffParam(timeframe);
       if (staleBefore) params.set("stale_before", staleBefore);
       const coverage = await api("/dashboard/market-data/coverage?" + params.toString());
       if (!coverage || !coverage.ok) {

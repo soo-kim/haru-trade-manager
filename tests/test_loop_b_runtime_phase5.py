@@ -106,3 +106,36 @@ def test_loop_b_runner_syncs_candles_and_dedupes_same_slot():
         assert state.row_count == 2
         assert state.last_candle_time == t1
         assert state.last_error is None
+
+
+def test_loop_b_runner_collects_without_scanning_when_strategy_disabled():
+    maker = build_session_factory()
+    repo = CandleRepository()
+    ticker = "005930"
+    t0 = datetime(2026, 1, 1, 9, 5, tzinfo=timezone.utc)
+    fetcher = FakeCandleFetcher(candles=[Candle(open=100, high=101, low=99, close=100, volume=1000, ts=t0)])
+    strategy = FakeStrategyEngine()
+    queue = InMemorySignalQueue(items=[])
+    scanner = LoopBScanner(strategy_engine=strategy, queue=queue)
+    runner = LoopBRunner(
+        scanner=scanner,
+        candle_repo=repo,
+        candle_fetcher=fetcher,
+        session_factory=maker,
+        now_fn=lambda: t0,
+        scan_enabled_provider=lambda: False,
+    )
+
+    produced = asyncio.run(runner.run_once_for_ticker(ticker))
+
+    assert produced == 0
+    assert fetcher.calls == [{"ticker": ticker, "timeframe": "5m", "since": None}]
+    assert strategy.calls == []
+    assert queue.items == []
+    with maker() as db:
+        rows = repo.list_recent(db, ticker=ticker, timeframe="5m", limit=10)
+        state = db.get(CandleCollectionState, {"ticker": ticker, "timeframe": "5m"})
+        assert len(rows) == 1
+        assert state is not None
+        assert state.row_count == 1
+        assert state.last_error is None
